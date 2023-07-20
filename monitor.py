@@ -2,10 +2,13 @@
 
 import os
 import time
+import platform
+import asyncio
 import requests
 from datetime import date, timedelta
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
+from kasa import SmartPlug
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -14,8 +17,13 @@ PWD = os.environ['PWD']
 # Existing TOKEN may be defined in env
 SERIAL = os.environ['SERIAL']
 SENDGRID_API_KEY=os.environ['SENDGRID_API_KEY']
+PLUG_IP = os.environ['PLUG']
 
-power_status = "off"
+if platform.system() == 'Windows':
+	asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+#pstate = True
+#p = SmartPlug(PLUG_IP)
 
 def get_token():
 	try:
@@ -46,6 +54,7 @@ def get_token():
 		response = requests.request("POST", url, headers=headers, data=payload)
 		if not response.status_code == 200:
 			print("ERROR - COULD NOT GET TOKEN!")
+			send_email("COULD NOT GET NEW AUTH TOKEN!")
 			exit()
 		else:
 			response_json = response.json()
@@ -75,6 +84,7 @@ def get_battery_level():
 		return battery
 	else:
 		print("ERROR - ECOFLOW API DID NOT RESPOND APPROPRIATELY WITH CODE " + response.status_code)
+		send_email("ERROR - ECOFLOW API DID NOT RESPOND APPROPRIATELY WITH CODE " + response.status_code)
 		exit()
 
 def send_email(msg):
@@ -92,17 +102,42 @@ def send_email(msg):
 	except Exception as e:
 	    print(e.message)
 
+async def get_plug(ip):
+	p = SmartPlug(ip)
+	await p.update()
+	if p.is_on:
+		return "on"
+	else:
+		return "off"
+
+async def set_plug(ip, pstate):
+	p = SmartPlug(ip)
+	await p.update()
+	if pstate == "on":
+		await p.turn_on()
+		print("Turned On AC Power")
+	elif pstate == "off":
+		await p.turn_off()
+		print("Turned Off AC Power")
+	else:
+		print("An error occurred")
+		send_email("An issue with the Kasa Plug occurred!")
 
 authtoken = get_token()
+ac_state = asyncio.run(get_plug(PLUG_IP))
+print(ac_state)
+
 while True:
 	current_level = get_battery_level()
 	if current_level == "unauthorized":
 		authtoken = get_token()
 		current_level = get_battery_level()
-	if current_level < 20:
+	if current_level < 20 and ac_state == "off":
 		# Turn AC Power On
-		print("uh oh low battery")
-	if current_level > 50:
+		ac_state = "on"
+		asyncio.run(set_plug(PLUG_IP, "on"))
+	if current_level > 50 and ac_state == "on":
 		# Turn AC Power Off
-		print("no more ac for you")
+		ac_state = "off"
+		asyncio.run(set_plug(PLUG_IP, "off"))
 	time.sleep(60)
