@@ -90,8 +90,8 @@ def renew_token():
 		print("Retrieved token " + token)
 		return token
 
-def get_battery_level(authtoken):
-
+def get_battery_level():
+	global authtoken
 	url = "https://api-a.ecoflow.com/iot-service/user/device"
 	payload = {}
 	headers = {
@@ -102,7 +102,7 @@ def get_battery_level(authtoken):
 
 	response = requests.request("GET", url, headers=headers, data=payload)
 	if response.status_code == 401:
-		authtoken = get_token()
+		authtoken = renew_token()
 		return "unauthorized"
 	elif response.status_code == 200:
 		api_data = response.json()
@@ -162,10 +162,10 @@ else:
 try:
 	with open(LOGFILE, 'a') as log:
 		while True:
-			current_level = get_battery_level(authtoken)
+			current_level = get_battery_level()
 			if current_level == "unauthorized":
-				authtoken = get_token()
-				current_level = get_battery_level(authtoken)
+				authtoken = renew_token()
+				current_level = get_battery_level()
 			if KASA:
 				if current_level < 20 and ac_state == "off":
 					# Turn AC Power On
