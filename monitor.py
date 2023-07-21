@@ -1,5 +1,7 @@
 # EcoFlow Battery Monitor
 
+import signal
+import sys
 import os
 import time
 import platform
@@ -12,58 +14,83 @@ from kasa import SmartPlug
 from dotenv import load_dotenv
 
 load_dotenv()
+# Required
 EMAIL = os.environ['EMAIL']
 PWD = os.environ['PWD']
 # Existing TOKEN may be defined in env
 SERIAL = os.environ['SERIAL']
 SENDGRID_API_KEY=os.environ['SENDGRID_API_KEY']
-PLUG_IP = os.environ['PLUG']
+
+# Define how often to query (default to every minute)
+try:
+	INTERVAL = int(os.environ['INTERVAL'])
+except:
+	INTERVAL = 60
+
+# Define if and where to write log file (default just logs to stdout)
+try:
+	LOG_ENABLED = os.environ['LOG_ENABLED']
+	LOGFILE = os.environ['LOGFILE']
+except:
+	LOG_ENABLED = False
+	LOGFILE = ""
+
+# Define if integrated with Kasa for smart AC power control (default off)
+try:
+	KASA = os.environ['KASA']
+	PLUG_IP = os.environ['PLUG']
+except:
+	KASA = False
+	PLUG_IP = ""
 
 if platform.system() == 'Windows':
 	asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
-#pstate = True
-#p = SmartPlug(PLUG_IP)
+def signal_term_handler(signal, frame):
+    print('got SIGTERM')
+    sys.exit(0)
 
 def get_token():
 	try:
 		token = 'Bearer ' + os.environ['TOKEN']
 	except:
-		url = "https://api-a.ecoflow.com/auth/login"
-
-		payload = json.dumps({
-		  "appVersion": "4.7.2.28",
-		  "countryCode": "US",
-		  "email": EMAIL,
-		  "os": "android",
-		  "osVersion": "30",
-		  "password": PWD,
-		  "scene": "IOT_APP",
-		  "source": "IOT_APP",
-		  "userType": "ECOFLOW"
-		})
-		headers = {
-		  'countrycode': 'US',
-		  'lang': 'en-us',
-		  'platform': 'android',
-		  'sysversion': '11',
-		  'version': '4.7.2.28',
-		  'Content-Type': 'application/json'
-		}
-
-		response = requests.request("POST", url, headers=headers, data=payload)
-		if not response.status_code == 200:
-			print("ERROR - COULD NOT GET TOKEN!")
-			send_email("COULD NOT GET NEW AUTH TOKEN!")
-			exit()
-		else:
-			response_json = response.json()
-			token = 'Bearer ' + response_json['data']['token']
-			print("Retrieved token " + token)
+		token = renew_token()
 	return token
 
+def renew_token():
+	url = "https://api-a.ecoflow.com/auth/login"
+	payload = json.dumps({
+	  "appVersion": "4.7.2.28",
+	  "countryCode": "US",
+	  "email": EMAIL,
+	  "os": "android",
+	  "osVersion": "30",
+	  "password": PWD,
+	  "scene": "IOT_APP",
+	  "source": "IOT_APP",
+	  "userType": "ECOFLOW"
+	})
+	headers = {
+	  'countrycode': 'US',
+	  'lang': 'en-us',
+	  'platform': 'android',
+	  'sysversion': '11',
+	  'version': '4.7.2.28',
+	  'Content-Type': 'application/json'
+	}
 
-def get_battery_level():
+	response = requests.request("POST", url, headers=headers, data=payload)
+	if not response.status_code == 200:
+		print("ERROR - COULD NOT GET TOKEN!")
+		send_email("COULD NOT GET NEW AUTH TOKEN!")
+		exit()
+	else:
+		response_json = response.json()
+		token = 'Bearer ' + response_json['data']['token']
+		print("Retrieved token " + token)
+		return token
+
+def get_battery_level(authtoken):
 
 	url = "https://api-a.ecoflow.com/iot-service/user/device"
 	payload = {}
@@ -75,7 +102,7 @@ def get_battery_level():
 
 	response = requests.request("GET", url, headers=headers, data=payload)
 	if response.status_code == 401:
-		get_token()
+		authtoken = get_token()
 		return "unauthorized"
 	elif response.status_code == 200:
 		api_data = response.json()
@@ -123,21 +150,33 @@ async def set_plug(ip, pstate):
 		print("An error occurred")
 		send_email("An issue with the Kasa Plug occurred!")
 
+signal.signal(signal.SIGTERM, signal_term_handler)
 authtoken = get_token()
-ac_state = asyncio.run(get_plug(PLUG_IP))
-print(ac_state)
+if KASA:
+	ac_state = asyncio.run(get_plug(PLUG_IP))
+	print("Currently AC state is " + ac_state)
+else:
+	ac_state = "off"
+	print("Kasa Integration not enabled, ac_state will show as off")
 
-while True:
-	current_level = get_battery_level()
-	if current_level == "unauthorized":
-		authtoken = get_token()
-		current_level = get_battery_level()
-	if current_level < 20 and ac_state == "off":
-		# Turn AC Power On
-		ac_state = "on"
-		asyncio.run(set_plug(PLUG_IP, "on"))
-	if current_level > 50 and ac_state == "on":
-		# Turn AC Power Off
-		ac_state = "off"
-		asyncio.run(set_plug(PLUG_IP, "off"))
-	time.sleep(60)
+try:
+	with open(LOGFILE, 'a') as log:
+		while True:
+			current_level = get_battery_level(authtoken)
+			if current_level == "unauthorized":
+				authtoken = get_token()
+				current_level = get_battery_level(authtoken)
+			if KASA:
+				if current_level < 20 and ac_state == "off":
+					# Turn AC Power On
+					ac_state = "on"
+					asyncio.run(set_plug(PLUG_IP, "on"))
+				if current_level > 50 and ac_state == "on":
+					# Turn AC Power Off
+					ac_state = "off"
+					asyncio.run(set_plug(PLUG_IP, "off"))
+			if LOG_ENABLED:
+				log.write(str(time.strftime('%m/%d/%Y %H:%M:%S')) + ',' + str(current_level) + ',' + ac_state + '\n')
+			time.sleep(INTERVAL)
+except KeyboardInterrupt:
+	print("Keyboard sent stop signal!")
