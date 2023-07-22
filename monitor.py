@@ -105,10 +105,14 @@ def get_battery_level():
 		authtoken = renew_token()
 		return "unauthorized"
 	elif response.status_code == 200:
-		api_data = response.json()
-		battery = api_data['data']['bound'][SERIAL]['soc']
-		print(str(battery) + '% at ' + time.strftime('%a %b %d %H:%M:%S'))
-		return battery
+		try:
+			api_data = response.json()
+			battery = api_data['data']['bound'][SERIAL]['soc']
+			print(str(battery) + '% at ' + time.strftime('%a %b %d %H:%M:%S'))
+			return battery
+		except:
+			msg = "api_error"
+			return msg
 	else:
 		print("ERROR - ECOFLOW API DID NOT RESPOND APPROPRIATELY WITH CODE " + response.status_code)
 		send_email("ERROR - ECOFLOW API DID NOT RESPOND APPROPRIATELY WITH CODE " + response.status_code)
@@ -159,24 +163,30 @@ else:
 	ac_state = "off"
 	print("Kasa Integration not enabled, ac_state will show as off")
 
+if LOG_ENABLED:
+	log = open(LOGFILE, 'a')
+
 try:
-	with open(LOGFILE, 'a') as log:
-		while True:
+	while True:
+		current_level = get_battery_level()
+		if current_level == "unauthorized":
+			authtoken = renew_token()
 			current_level = get_battery_level()
-			if current_level == "unauthorized":
-				authtoken = renew_token()
-				current_level = get_battery_level()
-			if KASA:
-				if current_level < 20 and ac_state == "off":
-					# Turn AC Power On
-					ac_state = "on"
-					asyncio.run(set_plug(PLUG_IP, "on"))
-				if current_level > 50 and ac_state == "on":
-					# Turn AC Power Off
-					ac_state = "off"
-					asyncio.run(set_plug(PLUG_IP, "off"))
-			if LOG_ENABLED:
-				log.write(str(time.strftime('%m/%d/%Y %H:%M:%S')) + ',' + str(current_level) + ',' + ac_state + '\n')
-			time.sleep(INTERVAL)
+		if current_level == "api_error":
+			print("An unknown error occurred with Ecoflow API")
+			time.sleep(30)
+			continue
+		if KASA and not isinstance(current_level, str):
+			if current_level < 20 and ac_state == "off":
+				# Turn AC Power On
+				ac_state = "on"
+				asyncio.run(set_plug(PLUG_IP, "on"))
+			if current_level > 50 and ac_state == "on":
+				# Turn AC Power Off
+				ac_state = "off"
+				asyncio.run(set_plug(PLUG_IP, "off"))
+		if LOG_ENABLED:
+			log.write(str(time.strftime('%m/%d/%Y %H:%M:%S')) + ',' + str(current_level) + ',' + ac_state + '\n')
+		time.sleep(INTERVAL)
 except KeyboardInterrupt:
 	print("Keyboard sent stop signal!")
