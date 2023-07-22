@@ -99,8 +99,11 @@ def get_battery_level():
 	  'countrycode': 'US',
 	  'lang': 'en-us'
 	}
-
-	response = requests.request("GET", url, headers=headers, data=payload)
+	try:
+		response = requests.request("GET", url, headers=headers, data=payload)
+	except:
+		msg = "api_error"
+		return msg
 	if response.status_code == 401:
 		authtoken = renew_token()
 		return "unauthorized"
