@@ -7,6 +7,7 @@ import time
 import platform
 import asyncio
 import requests
+import json
 from datetime import date, timedelta
 from sendgrid import SendGridAPIClient
 from sendgrid.helpers.mail import Mail
